@@ -1,0 +1,175 @@
+---
+title: "Pipeline DADA2"
+author: "Ruben Chaboy"
+date: 
+output: html_document
+---
+
+
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+
+#  Loading libraries 
+```{r}
+ 
+library(dada2)
+
+```
+
+
+# Parameters
+
+The parameters used later in the workflow are defined here:
+
+- truncLen: truncation site.
+
+- maxmismatches: maximum number of mismatches between R1 and R2 reads during the merging process.
+
+- removeBimeraDenovo_method: method used to remove chimeras.
+
+- allowoneoff: this parameter allows sequences with a single mismatch (i.e., a one-off error) to be accepted as valid and not removed. This is useful when reads contain sequencing errors.
+
+```{r}
+
+truncLen <- c(268, 218)
+maxmismatches <- 1 
+removeBimeraDenovo_method <- "consensus"
+allowoneoff <- TRUE
+
+```
+
+# Data preparation 
+
+This chunk defines the input directory containing the forward (R1) and reverse (R2) reads and creates the output paths for the filtered reads. Finally, the files are sorted to continue with processing.
+
+```{r}
+
+# Change directory as needed
+
+pathF <- "C:/Users/rubenuam/OneDrive/Tesis/Procesamiento/Prueba inicial dada2/data/R1/" 
+pathR <- "C:/Users/rubenuam/OneDrive/Tesis/Procesamiento/Prueba inicial dada2/data/R2/" 
+
+filtpathF <- file.path(pathF, "filtered") 
+filtpathR <- file.path(pathR, "filtered")
+
+fastqFs <- sort(list.files(pathF, pattern="fastq"))
+fastqRs <- sort(list.files(pathR, pattern="fastq"))
+fastqRs #Comprobación
+
+```
+
+# Quality filtering and read trimming {#filtrado}
+
+Here, reads are filtered using DADA2 default parameters. The reads are trimmed to the desired length and Phix sequences are removed.. 
+
+```{r}
+
+if(length(fastqFs) != length(fastqRs)) stop("La longitud de los archivos foward y reverse no coincide.")
+trimmed <- filterAndTrim(fwd=file.path(pathF, fastqFs), filt=file.path(filtpathF, fastqFs),
+              rev=file.path(pathR, fastqRs), filt.rev=file.path(filtpathR, fastqRs),
+              truncLen=c(268,218), rm.phix=TRUE,
+              compress=TRUE, verbose=TRUE, multithread=TRUE)
+
+```
+
+# Retrieval of identifiers 
+
+In this chunk, the original sample identifiers are recovered.
+
+```{r}
+
+filtFs <- list.files(filtpathF, pattern="fastq", full.names = TRUE)
+filtRs <- list.files(filtpathR, pattern="fastq", full.names = TRUE)
+sample.names <- sapply(strsplit(basename(filtFs), "_L001"), `[`, 1) # Assumes filename = samplename_XXX.fastq
+sample.namesR <- sapply(strsplit(basename(filtRs), "_L001"), `[`, 1) # Assumes filename = samplename_XXX.fastq
+if(!identical(sample.names, sample.namesR)) stop("La longitud de los archivos foward y reverse no coincide")
+names(filtFs) <- sample.names
+names(filtRs) <- sample.names
+set.seed(100)
+names(filtFs) # Verification
+```
+
+# Error model inference 
+In this step, the error profiles for forward and reverse reads are estimated, which are needed for sequence variant inference in DADA2.
+
+```{r}
+
+errF <- learnErrors(filtFs, nbases=1e8, multithread=TRUE)
+errR <- learnErrors(filtRs, nbases=1e8, multithread=TRUE)
+
+```
+
+# Error model evaluation 
+
+Here, it is visually checked that the error model learned by DADA2 is appropriate.
+
+```{r}
+
+plotErrors(errF, nominalQ=TRUE)
+plotErrors(errR, nominalQ=TRUE)
+
+```
+
+# ASV inference and paired-end read merging 
+
+In this step, ASVs are inferred and paired-end reads are merged, generating full sequences from the forward and reverse reads.
+
+```{r}
+
+mergers <- vector("list", length(sample.names))
+names(mergers) <- sample.names
+for(sam in sample.names) {
+  cat("Processing:", sam, "\n")
+    derepF <- derepFastq(filtFs[[sam]])
+    ddF <- dada(derepF, err=errF, multithread=TRUE)
+    derepR <- derepFastq(filtRs[[sam]])
+    ddR <- dada(derepR, err=errR, multithread=TRUE)
+    merger <- mergePairs(ddF, derepF, ddR, derepR,maxMismatch = maxmismatches, minOverlap = 12)
+    mergers[[sam]] <- merger
+}
+rm(derepF); rm(derepR)
+
+save.image("dada2multithreads_intermediate.RData")
+
+```
+
+# Final processing {#final}
+
+In this section, the sequence table is constructed, chimeras are removed, and taxonomic assignment is performed.
+
+```{r}
+
+# 1) Construction of the sequence table 
+
+seqtab <- makeSequenceTable(mergers)
+View (seqtab)
+seqtabtraspuesta <-t(seqtab)
+View (seqtabtraspuesta)
+
+# 2) Chimera removal
+
+seqtab_nochim <- removeBimeraDenovo(seqtab, method=removeBimeraDenovo_method, multithread=TRUE,allowOneOff = allowoneoff)
+
+# 3) Taxonomic assignment
+
+tax <- assignTaxonomy(seqtab_nochim, "C:/Users/rubenuam/OneDrive/Tesis/Procesamiento/Prueba inicial dada2/silva_nr_v123_train_set.fa.gz", multithread=TRUE)
+
+# 4) Saving (change directory as needed)
+
+saveRDS(seqtab, "C:/Users/rubenuam/OneDrive/Tesis/Procesamiento/Prueba inicial dada2/seqtab_final.rds") 
+
+saveRDS(tax, "C:/Users/rubenuam/OneDrive/Tesis/Procesamiento/Prueba inicial dada2/tax_final.rds") 
+
+getN <- function(x) sum(getUniques(x))
+track <- cbind(trimmed, 
+               sapply(mergers, getN), 
+               rowSums(seqtab_nochim))
+colnames(track) <- c('input', 'filtered', 'dada+merged', 'nochim')
+
+save.image("dada2multithreads.RData")
+
+```

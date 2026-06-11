@@ -1,0 +1,249 @@
+---
+title: "Incorporación del árbol filogenético"
+output: html_document
+date: 
+---
+
+
+
+
+---
+
+## Objective
+
+The objective of this script is to take a phyloseq object and “map” its sequences against a reference database with an associated tree and taxonomy (e.g., Greengenes2), in order to include a phylogenetic tree in the object and thus analyze phylogenetic measures (e.g., Faith’s PD, UniFrac, etc.).
+
+The script generates a FASTA file of sequences that must be analyzed via BLAST. The output is then processed together with the reference taxonomy and the database tree to create the final object. That final object will be analyzed in the analysis script for each chapter.
+
+## Loading libraries and data
+
+The libraries used in the study are loaded.  
+
+```{r}
+library(phyloseq)
+library(Biostrings)
+library(tidyverse)
+library(eDNAfuns)
+library(dplyr)
+
+```
+
+## Loading the object {#objeto}
+
+This object was previously saved as a phyloseq object, e.g., save(ps_nocontrol_filtrado_rare).
+
+```{r}
+
+ps <- readRDS("ps_nocontrol_filtrado_rare.rds")
+
+```
+
+## Tidy ASV table
+
+A hash is generated for each ASV sequence. The phyloseq otu_table is then converted to tidy format, and the hash identifier is appended.
+
+```{r}
+
+colnames(otu_table(ps))|> 
+  map(digest::sha1) |> 
+  unlist() -> hashes
+
+tibble(Hash = hashes,
+       Seq = colnames(otu_table(ps))) -> Hash_key
+
+otu_table(ps) |>
+  as.data.frame() |> 
+  rownames_to_column("sample_name") |> 
+  pivot_longer(-sample_name, names_to = "Seq", values_to = "nr") |> 
+  inner_join(Hash_key) |> 
+  dplyr::select(-Seq) |> 
+  filter (nr  != 0) -> ASV_table
+
+```
+
+## BLAST preparation
+
+A sequence file is generated for subsequent BLAST analysis. 
+
+```{r create fasta for blast}
+
+Hash_key |>
+  semi_join(ASV_table) |>
+  fasta_writer(sequence = Seq, header = Hash, file.out = "Secuencias4gg.fasta")
+
+```
+
+## BLAST
+
+The generated sequence file is analyzed by running the “blast” script. The resulting output is then copied into the working directory.
+
+BLAST processing 
+
+    
+## BLAST processing 
+
+The results obtained from BLAST are processed.
+
+```{r}
+
+blast_100 <- read_table("blast_output.txt", 
+           col_names = c("Hash", "sseqid",  "pident", "length" ,"mismatch",
+                         "gapopen" ,"qstart","qend", "sstart", "send" ,"evalue" ,
+                         "bitscore", "staxid", "qlen"))
+
+
+print("Sequences sent to blast:")
+Hash_key |>
+  semi_join(ASV_table) ->caca
+dim(caca)
+print("Seqeunces with valid blast:")
+blast_100 |> dim()
+
+dim(caca) #
+blast_100 |> dim() 
+length(unique(blast_100$sseqid)) 
+
+```
+
+
+## Integration of BLAST results 
+
+The original ASVs are combined with the BLAST results, and reads are grouped by sample and reference taxon (sseqid).
+
+```{r}
+
+ver <- ASV_table |>
+  inner_join(blast_100) |>
+  select(sample_name, nr, sseqid) |>
+  group_by(sample_name, sseqid) |>
+  summarise(nr = sum(nr), .groups = "drop")
+
+# Quick check
+stopifnot(all(c("sample_name","sseqid","nr") %in% names(ver)))
+
+```
+
+## Taxonomy processing
+
+The taxonomic table is imported and transformed by splitting the taxonomic levels and adapting the format for use in the phyloseq object.
+
+```{r}
+
+gg2_tax <- read_tsv("taxonomy_99.tsv", col_types = cols(.default = col_character()))
+names(gg2_tax) <- names(gg2_tax) |> str_replace_all('^"|"$', '')
+
+gg2_tax <- gg2_tax %>%
+  select(
+    Feature.ID = any_of(c("Feature.ID","`Feature.ID`",'"Feature.ID"')),
+    Taxon      = any_of(c("Taxon","`Taxon`",'"Taxon"'))
+  ) %>%
+  mutate(
+    Feature.ID = str_remove_all(Feature.ID, '^"|"$'),
+    Taxon      = str_remove_all(Taxon,      '^"|"$')
+  )
+
+
+tax_df2 <- gg2_tax %>%
+  separate(
+    Taxon,
+    into = c("Kingdom","Phylum","Class","Order","Family","Genus","Species"),
+    sep = ";", fill = "right", extra = "merge"
+  ) %>%
+  # remove quotes and the first 4 characters from each field
+  mutate(across(Kingdom:Species, ~{
+    x <- .
+    x <- str_remove_all(x, '^"|"$')
+   # if the string has fewer than 4 characters, avoid NAs
+    out <- ifelse(is.na(x), NA_character_,
+                  ifelse(nchar(x) >= 4, substr(x, 5, nchar(x)), ""))
+    # trim spaces
+    str_trim(out)
+  })) %>%
+  rename(sseqid = Feature.ID) %>%
+  mutate(across(everything(), as.character))
+
+
+# Quick key checks
+#  - how many reference sseqid values appear in tax_df2?
+cat("Matching taxa  ver↔tax_df2:", sum(unique(ver$sseqid) %in% tax_df2$sseqid), "out of",
+    length(unique(ver$sseqid)), "\n")
+
+```
+
+## Metadata preparation 
+
+The information in sample_data(ps) is converted to data.frame format, and the sample identifiers needed for data integration are added.
+
+```{r}
+
+meta_df <- as(sample_data(ps), "data.frame") %>%
+  rownames_to_column(var = "sample_name") %>%
+  mutate(across(everything(), as.character))
+
+# Check common columns for the tidy2phyloseq function
+stopifnot("sample_name" %in% names(ver), "sample_name" %in% names(meta_df))
+stopifnot("sseqid" %in% names(ver), "sseqid" %in% names(tax_df2))
+
+# Check sample overlap
+cat("Matching sampless ver↔meta_df:", sum(unique(ver$sample_name) %in% meta_df$sample_name),
+    "out of", length(unique(ver$sample_name)), "\n")
+
+```
+
+## Creation of the phyloseq object
+
+The phyloseq object is generated by integrating abundance data, taxonomy, and metadata. The phylogenetic tree is then added to this object after verifying the correspondence between taxa and tree labels. Finally, the resulting phyloseq object with the incorporated phylogenetic tree is saved for downstream analyses.
+
+```{r}
+
+new_ps <- tidy2phyloseq(
+  ASV_table    = ver,
+  OTU_taxonomy = tax_df2,              
+  metadata     = meta_df,
+  Taxa         = "sseqid",
+  Sample       = "sample_name",
+  Reads        = "nr"
+)
+
+
+# Read tree (Newick)
+
+tree <- ape::read.tree("otus99_tree.nwk")
+
+# Optional: light normalization of labels: remove quotes and outer spaces
+
+tree$tip.label <- tree$tip.label |>
+  str_remove_all('^"|"$') |>
+  str_trim()
+
+# Helper to validate and insert a tree into a given phyloseq object
+attach_tree <- function(ps_obj, tree_obj) {
+  # a) extract taxa IDs from the phyloseq object
+  tx <- phyloseq::taxa_names(ps_obj)
+
+# b) strict checks 
+  #    1) no duplicated tips in the tree
+  stopifnot(!any(duplicated(tree_obj$tip.label)))
+  #    2)  all phyloseq taxa are present in the tree
+  missing_in_tree <- setdiff(tx, tree_obj$tip.label)
+  stopifnot(length(missing_in_tree) == 0)
+ 
+   # c) insert tree (no pruning or modification: exact match assumed)
+    phyloseq::phy_tree(ps_obj) <- tree_obj
+  ps_obj
+}
+
+# --- 3) Apply to your objects (if they exist) ---
+
+if (exists("new_ps")) {
+  new_ps <- attach_tree(new_ps, tree)
+}
+
+
+
+save(new_ps,
+     file = "phyloseq_objects_with_tree.RData",
+     compress = "xz")
+
+```
+

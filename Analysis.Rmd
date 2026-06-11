@@ -1,0 +1,1486 @@
+---
+title: "Script capítulo Temporal"
+author: "Ruben"
+date: "2025-07-11"
+output: html_document
+---
+
+
+## Loading of the libraries and data 
+
+Here we load the libraries we will use in the study. The data generated from sequence processing following the standard workflow of the DADA2 package are loaded. These data contain the table of ASV abundances per sample, as well as their taxonomic assignment. 
+
+
+```{r}
+knitr::opts_knit$set(root.dir = getwd())
+suppressMessages(suppressWarnings({
+datos <- "dada2multithreads.RData"
+suppressPackageStartupMessages({
+library(dada2)
+library(ggplot2)
+library(here)
+library(phyloseq)
+library(microbiome)
+library(dplyr)
+library(writexl)
+library(readxl)
+library(openxlsx)
+library(gridExtra)
+library(patchwork)
+library(Biostrings)
+library(tidyr)
+library(tibble)
+library(vegan)
+library(scales)
+library(car)
+library(officer)
+library(flextable)
+library(patchwork)
+library(broom)
+library(pheatmap)
+library(picante)
+library(reshape2)
+library(ppcor)
+library(lmtest)
+library(sandwich)
+library(forcats)
+library(Maaslin2)
+library(lme4)
+})
+theme_set(theme_bw())
+load(here("data",datos)) })) 
+
+dir.create("test")
+dir.create("graficos")
+out_graf <- "graficos"
+if (!dir.exists(out_graf)) dir.create(out_graf)
+
+```
+
+## Data preparation
+  
+1. All experimental data were imported from an Excel file.
+2. A phyloseq object was created.
+
+```{r}
+samdf <- read_excel("metadata_Temp.xlsx")
+samdf <- as.data.frame(samdf)
+
+
+rownames(samdf) <- samdf$Nombre
+
+ps <- phyloseq(otu_table(seqtab_nochim, taxa_are_rows = FALSE), 
+               sample_data(samdf), 
+               tax_table(tax))
+
+```
+
+### Removal of controls and non-representative samples
+
+Samples corresponding to controls were removed from the dataset, including negative plant controls (CN), DNA extraction controls (Cext), and negative PCR controls (NegPCR). Samples obtained from plants that did not grow properly were also excluded.
+
+```{r}
+
+ps_nocontrol <- subset_samples(ps, !(Comunidad %in% c("CN", "Cext", "NegPCR"))& 
+                 Observaciones %in% c("HONGO", "OK"))
+
+```
+
+### Removal of non-bacterial sequences
+
+Sequences corresponding to mitochondria, chloroplasts, and eukaryotes were removed. This was done because the selected primers may also amplify the 16S region of these organelles.
+
+```{r}
+print("Initial:")
+ps_nocontrol
+inicial<-sum(otu_table(ps_nocontrol))
+print ("Here, chloroplasts, mitochondria, and eukaryotic sequences were removed")
+ps_nocontrol_filtrado<- subset_taxa(ps_nocontrol, Class!="Chloroplast")
+sin_cloroplastos<-sum(otu_table(ps_nocontrol_filtrado))
+ps_nocontrol_filtrado <- subset_taxa(ps_nocontrol_filtrado, Family!="Mitochondria")
+sin_mitocondrias<-sum(otu_table(ps_nocontrol_filtrado))
+ps_nocontrol_filtrado <- subset_taxa(ps_nocontrol_filtrado, Kingdom!="Eukaryota")
+sin_eucariotas<-sum(otu_table(ps_nocontrol_filtrado))
+valores<-c(inicial,sin_cloroplastos,sin_mitocondrias,sin_eucariotas)
+print("initial, after removal of chloroplasts, after removal of mitochondria, after removal of eukaryotes")
+print(valores)
+print(paste0("Total Initial= ",inicial))
+print(paste0("  removing chloroplasts= ",sin_cloroplastos))
+print(paste0("  removing chloroplasts and mitochondria= ",sin_mitocondrias))
+print(paste0("  removing chloroplasts, mitochondria, and eukaryotes= ",sin_eucariotas))
+print("Filtered:")
+ps_nocontrol_filtrado
+
+suppressMessages(summarize_phyloseq(ps_nocontrol_filtrado))
+```
+
+
+### Removal of outliers
+
+Previous analyses showed that some samples from community E had a microbial composition that was markedly different from the rest of the samples in that community. The 10 most abundant families in these samples were calculated and compared with those in other samples to confirm this difference. The reasons why these samples failed are unknown, but given that their profiles were very different from the rest, they were excluded from the study to avoid biasing the results.
+
+
+```{r}
+
+# Selection of community E only
+ps_E <- subset_samples(ps_nocontrol_filtrado, Comunidad == "E")
+
+# Family-level aggregation
+ps_familia_E <- tax_glom(ps_E, taxrank = "Family")
+
+# Convert to relative abundances
+ps_familia_E_rel <- transform_sample_counts(ps_familia_E, function(x) x / sum(x))
+
+# Convert to data frame
+df_familia_E <- as.data.frame(psmelt(ps_familia_E_rel))
+df_familia_E$Family <- as.character(df_familia_E$Family)
+
+# Sum abundances by family
+df_familia_suma_E <- df_familia_E %>%
+  group_by(Family) %>%
+  summarise(Total = sum(Abundance), .groups = "drop") %>%
+  arrange(desc(Total))
+
+# Select top 10 families
+top10_familias_E <- df_familia_suma_E$Family[1:10]
+
+# Filter and prepare for plotting
+df_top10_E <- df_familia_E %>%
+  filter(Family %in% top10_familias_E) %>%
+  group_by(Sample, Family) %>%
+  summarise(Abundancia = sum(Abundance) * 100, .groups = "drop")
+
+# Plot
+Plot_top10_E <- ggplot(df_top10_E, aes(x = Sample, y = Abundancia, fill = Family)) +
+  geom_bar(stat = "identity") +
+  theme_bw() +  
+  ylab("Abundancia relativa (%)") +
+  xlab("Muestras") +
+  ggtitle("Top 10 familias - Comunidad E") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave("graficos/top10_familias_ComunidadE.png",
+       plot = Plot_top10_E,
+       width = 8, height = 6, dpi = 300)
+
+outliers <- c("Temp_E_7_1_S219", "Temp_E_5_1_S146", "Temp_E_8_1_S4")
+
+ps_nocontrol_filtrado_2 <- subset_samples(ps_nocontrol_filtrado, !(sample_names(ps_nocontrol_filtrado) %in% outliers))
+
+```
+
+### Correction of NAs 
+
+Samples with MPN values recorded as NA, either because the corresponding bacteria did not grow in those samples or because the values were below the detection limit (<110000 MPN/mL), were converted to the detection-limit value of 220000 MPN per plant.
+
+1. The text values ‘NA’ are replaced with missing values, which are coded as NA, but not in text format as they appear in the original data sheet. 
+2. The MPN column was converted to numeric type.
+The NA (missing) values in the MPN column are replaced with 220000.
+4. All values below 110000 in the MPN column were converted to 220000.
+
+For dry weight, samples with NA values (because the aboveground part did not grow sufficiently) were assigned a value of 0 g.
+
+1. The text values ‘NA’ are replaced with NA (missing) values.
+2. The Weight column was converted to numeric type.
+3.  The NA (missing) values in the Weight column are replaced with 0.
+
+```{r}
+
+sample_data(ps_nocontrol_filtrado_2)$MPN[sample_data(ps_nocontrol_filtrado_2)$MPN == "NA"] <- NA
+sample_data(ps_nocontrol_filtrado_2)$MPN <- as.numeric(sample_data(ps_nocontrol_filtrado_2)$MPN)
+sample_data(ps_nocontrol_filtrado_2)$MPN[is.na(sample_data(ps_nocontrol_filtrado_2)$MPN)] <- 220000
+sample_data(ps_nocontrol_filtrado_2)$MPN[sample_data(ps_nocontrol_filtrado_2)$MPN < 220000] <- 220000
+
+sample_data(ps_nocontrol_filtrado_2)$Peso_Seco[sample_data(ps_nocontrol_filtrado_2)$Peso_Seco == "NA"] <- NA
+sample_data(ps_nocontrol_filtrado_2)$Peso_Seco <- as.numeric(sample_data(ps_nocontrol_filtrado_2)$Peso_Seco)
+sample_data(ps_nocontrol_filtrado_2)$Peso_Seco[is.na(sample_data(ps_nocontrol_filtrado_2)$Peso_Seco)] <- 0
+
+
+
+sample_data(ps_nocontrol_filtrado_2)$MPN.Peso[sample_data(ps_nocontrol_filtrado_2)$MPN.Peso == "NA"] <- NA
+sample_data(ps_nocontrol_filtrado_2)$MPN.Peso <- as.numeric(sample_data(ps_nocontrol_filtrado_2)$MPN.Peso)
+sample_data(ps_nocontrol_filtrado_2)$MPN.Peso[is.na(sample_data(ps_nocontrol_filtrado_2)$MPN.Peso)] <- 0
+
+```
+
+## Subsampling 
+
+The number of sequences per sample was visualized to determine the subsampling depth. A fixed seed of 134 was used.
+
+```{r}
+
+sort(sample_sums(ps_nocontrol_filtrado_2), decreasing = TRUE)
+
+suppressMessages(suppressWarnings({
+  set.seed(134)  
+  ps_nocontrol_filtrado_rare <- rarefy_even_depth(ps_nocontrol_filtrado_2, sample.size = 24562, trimOTUs = TRUE)
+}))
+
+png("graficos/profundidad_secuenciacion.png", width = 800, height = 600)
+
+plot(
+  sort(sample_sums(ps_nocontrol_filtrado_2)),
+  ylab = "Sequencing depth",
+  xlab = "Samples ordered by depth",
+  main = "Sequencing depth per sample",
+  cex.lab = 1.6,   
+  cex.axis = 1.4,   
+  cex.main = 1.8    
+)
+
+abline(h = 24562, col = "red", lwd = 2)
+
+dev.off()
+
+```
+
+## Saving and loading 
+
+Saving of the phyloseq object and loading of data with phylogenetic distance.
+
+
+```{r}
+
+saveRDS(ps_nocontrol_filtrado_rare, "ps_nocontrol_filtrado_rare.rds")
+# In a separate script, the sequences from the previously generated phyloseq object were matched against a reference database with an associated phylogenetic tree and taxonomy (e.g., Greengenes2). This allowed the phylogenetic tree to be incorporated into the object and enabled analyses based on phylogenetic metrics (e.g., Faith's PD, UniFrac, etc.).
+nuevosdatos <- "phyloseq_objects_with_tree.Rdata"
+
+load(here("data",nuevosdatos ))
+
+```
+
+---
+
+# **Diversity analysis and correlations** 
+
+## Creation of working variables 
+
+```{r}
+
+datos_est <- as(sample_data(ps_nocontrol_filtrado_rare), "data.frame")
+datos_est$log_MPN <- log10(datos_est$MPN)
+datos_est$log_MPN.Peso <- datos_est$log_MPN / datos_est$Peso_Seco
+
+Riqueza <- estimate_richness(ps_nocontrol_filtrado_rare, measures = "Observed")
+Homogeneidad <- estimate_richness(ps_nocontrol_filtrado_rare, measures = "Shannon")
+
+Faith_D <- pd(as(otu_table(new_ps), "matrix"), phy_tree(new_ps))
+datos_est$Riqueza <- Riqueza[rownames(datos_est), "Observed"]
+datos_est$Homogeneidad <- Homogeneidad[rownames(datos_est), "Shannon"]
+datos_est$Faith_D <- Faith_D[rownames(datos_est), "PD"]
+
+# Variable type checking
+
+datos_est$Comunidad   <- factor(datos_est$Comunidad)   # unordered factor
+datos_est$Tiempo  <- as.integer(datos_est$Tiempo)  # 1..8
+# Centered and scaled version of time for numerical stability
+datos_est$cTiempo <- as.numeric(scale(datos_est$Tiempo, center = TRUE, scale = TRUE))
+
+# Sum-to-zero contrast coding is recommended for stable interpretation in unbalanced designs. Factors are coded so that the intercept represents the overall mean across levels, and coefficients represent deviations from that mean rather than comparisons with a reference level. This yields more stable and interpretable results in unbalanced designs.
+options(contrasts = c("contr.sum", "contr.poly"))
+
+```
+
+### Visualization of working variables
+
+The values of the working variables are plotted by Community and Time.
+
+```{r}
+
+# Means ± error by Time and Community
+
+vars <- c("log_MPN", "Peso_Seco", "Riqueza", "Homogeneidad", "Faith_D")
+
+lista_graficos <- list()
+
+for (v in vars) {
+  # Summary by Community × Time
+  df_mean <- datos_est %>%
+    group_by(Comunidad, Tiempo) %>%
+    summarise(
+      n    = n(),
+      mean = mean(.data[[v]], na.rm = TRUE),
+      sd   = sd(.data[[v]],   na.rm = TRUE),
+      se   = sd / sqrt(n),
+      .groups = "drop"
+    )
+
+# Plot: means ± SE by Time and Community
+  p <- ggplot(df_mean, aes(x = Tiempo, y = mean, color = Comunidad, group = Comunidad)) +
+    geom_line(size = 1) +
+    geom_point(size = 2) +
+    geom_errorbar(aes(ymin = mean - se, ymax = mean + se), width = 0.15) +
+    labs(
+      x = "Time",
+      color = "Community",
+      y = ifelse(v == "Riqueza", "Observed richness",
+      ifelse(v == "Peso_Seco", "Dry Weight (g)",
+      ifelse(v == "Homogeneidad", "Evenness",
+      ifelse(v == "log_MPN.Peso", "log_MPN/Peso",
+      ifelse(v == "Faith_D", "Faith’s diversity", v))))) 
+  ) +
+    theme_bw()+
+      scale_x_continuous(breaks = unique(df_mean$Tiempo))+
+  theme(
+    axis.text.x = element_text(size = 10, angle = 0, hjust = 1),  
+    axis.text.y = element_text(size = 10),
+    axis.title.x = element_text(size = 10, face = "bold"),         
+    axis.title.y = element_text(size = 10, face = "bold"),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12, face="bold"),
+    plot.title   = element_text(size = 12, face = "bold", hjust = 0.5) 
+  )
+
+
+    lista_graficos[[v]] <- p
+
+  fn <- file.path(out_graf, paste0( "medias_SE_", v, ".png"))
+  ggsave(filename = fn, plot = p, width = 7, height = 5, dpi = 300)
+
+  message("Guardado: ", fn)
+}
+
+panel <- (
+  lista_graficos[["log_MPN"]] + labs(title = NULL) +
+  lista_graficos[["Peso_Seco"]] + labs(title = NULL)
+) +
+  plot_annotation(tag_levels = "A", tag_suffix = ") ") & 
+  theme(legend.position = "right")
+
+panel <- panel + plot_layout(guides = "collect")
+
+
+ggsave("graficos/medias_SE_logMPN_PesoSeco.png",
+       plot = panel,
+       width = 10, height = 5, dpi = 300)
+
+
+panel <- (
+  lista_graficos[["Riqueza"]] + labs(title = NULL) +
+  lista_graficos[["Homogeneidad"]] + labs(title = NULL)
+) +
+  plot_annotation(tag_levels = "A", tag_suffix = ") ") & 
+  theme(legend.position = "right")
+
+panel <- panel + plot_layout(guides = "collect")
+
+
+ggsave("graficos/medias_SE_Riqueza_Homogeneidad.png",
+       plot = panel,
+       width = 10, height = 5, dpi = 300)
+
+```
+
+The ratio between load and weight values is represented here. Data with a weight of 0 are removed, since the ratio cannot be calculated for them.
+
+```{r}
+
+
+datos_est2 <- subset(datos_est, is.finite(log_MPN.Peso))
+
+df_mean_log_MPN.Peso <- datos_est2 %>%
+  group_by(Comunidad, Tiempo) %>%
+  summarise(
+    n    = n(),
+    mean = mean(.data[["log_MPN.Peso"]], na.rm = TRUE),
+    sd   = sd(.data[["log_MPN.Peso"]], na.rm = TRUE),
+    se   = sd / sqrt(n),
+    .groups = "drop"
+  )
+
+medias_log_MPN.Peso <- ggplot(df_mean_log_MPN.Peso, aes(x = Tiempo, y = mean, color = Comunidad, group = Comunidad)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = mean - se, ymax = mean + se), width = 0.15) +
+  labs(
+    x = "Time",
+    y = "log10(MPN) / Peso seco"
+  ) +
+  theme_bw() +
+  scale_x_continuous(breaks = unique(df_mean_log_MPN.Peso$Tiempo)) +
+  theme(
+    axis.text.x = element_text(size = 10, angle = 0, hjust = 1),
+    axis.text.y = element_text(size = 10),
+    axis.title.x = element_text(size = 10, face = "bold"),
+    axis.title.y = element_text(size = 10, face = "bold"),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12, face = "bold"),
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5)
+  )
+
+# guardar archivo
+ggsave("graficos/medias_log_MPN.Peso.png", plot = medias_log_MPN.Peso,
+       width = 7, height = 5, dpi = 300)
+
+message("Guardado: ", fn)
+```
+
+
+### Statistical analysis of Time and Community 
+
+The statistical effects of Time, Community, and their interaction on the working variables were analyzed.
+
+```{r}
+
+vars <- c("log_MPN", "Peso_Seco", "Riqueza", "Homogeneidad", "Faith_D")
+mods <- list()
+
+datos_est$Comunidad <- relevel(datos_est$Comunidad, ref = "A")
+contrasts(datos_est$Comunidad)
+# Community 1 corresponds to Community A, Community 2 to Community B, and so on.
+
+pdf("Resultados_Modelos_Graficos.pdf", width = 12, height = 8)
+for (y in vars) {
+  cat("\n\n====================================================\n")
+  cat("Respuesta:", y, "\n")
+  form <- as.formula(paste0(y, " ~ cTiempo * Comunidad"))
+  fit  <- lm(form, data = datos_est)
+  mods[[y]] <- fit
+  
+  cat("\n--- SUMMARY (individual coefficients vs. reference) ---\n")
+  print( lmtest::coeftest(fit, vcov = sandwich::vcovHC(fit, type = "HC3"))
+)
+  
+  cat("\n--- ANOVA global (Type III de base R) ---\n")
+  print(Anova(fit,type = 3, white.adjust = "hc3"))
+  
+  # Diagnostic plots
+  par(mfrow=c(2,2))
+  plot(fit, main = y)
+  par(mfrow=c(1,1))
+}
+
+
+for (v in vars) {
+  cat("\n====================================================\n")
+  cat("Variable:", v, "\n")
+  
+  m <- mods[[v]]  # retrieve the model
+  residuales <- residuals(m)
+  
+    # Shapiro-Wilk test for residual normality
+  cat("\n--- Shapiro-Wilk (normalidad de residuales) ---\n")
+  if (length(residuales) <= 5000) {
+    print(shapiro.test(residuales))
+  } else {
+    cat("Too many observations for Shapiro (>5000), skipping the test.\n")
+  }
+  
+  # Levene's test for homogeneity of variances across Communities
+  cat("\n--- Levene's test (residual variances across Communities) ---\n")
+  print(leveneTest(residuales ~ datos_est$Comunidad))
+  
+  # Breusch-Pagan test for heteroscedasticity
+  cat("\n--- Breusch-Pagan test (model heteroscedasticity) ---\n")
+  print(lmtest::bptest(m))
+}
+
+dev.off()
+
+```
+
+A linear model was fitted for the load-to-weight ratio as a function of Community, Time, and their interaction. Data with Weight = 0 were excluded because the ratio could not be calculated.
+
+```{r}
+
+datos_est2 <- subset(datos_est, is.finite(log_MPN.Peso))
+
+
+datos_est2$Comunidad <- relevel(datos_est2$Comunidad, ref = "A")
+contrasts(datos_est2$Comunidad)
+# Community 1 corresponds to Community A, Community 2 to Community B, and so on.
+
+pdf("Resultados_log_MPN_Peso.pdf", width = 12, height = 8)
+
+cat("\n\n====================================================\n")
+cat("Respuesta: log_MPN.Peso\n")
+lm_log_MPN.Peso <- lm(log_MPN.Peso ~ cTiempo * Comunidad, data = datos_est2)
+
+cat("\n--- SUMMARY (individual coefficients vs. reference) ---\n")
+print(lmtest::coeftest(lm_log_MPN.Peso, vcov = sandwich::vcovHC(lm_log_MPN.Peso, type = "HC3")))
+
+cat("\n--- ANOVA global (Type III de base R) ---\n")
+print(Anova(lm_log_MPN.Peso, type = 3, white.adjust = "hc3"))
+
+# Diagnostic plots 
+par(mfrow=c(2,2))
+plot(lm_log_MPN.Peso, main = "log_MPN.Peso")
+par(mfrow=c(1,1))
+
+residuales <- residuals(lm_log_MPN.Peso)
+
+# Test de normalidad de residuales (Shapiro-Wilk)
+cat("\n--- Shapiro-Wilk (normalidad de residuales) ---\n")
+if (length(residuales) <= 5000) {
+  print(shapiro.test(residuales))
+} else {
+  cat("Too many observations for Shapiro (>5000), skipping the test.\n")
+}
+
+ # Levene's test for homogeneity of variances across Communities
+cat("\n--- Levene's test (residual variances across Communities) ---\n")
+print(leveneTest(residuales ~ datos_est2$Comunidad))
+
+# Breusch-Pagan test for heteroscedasticity
+cat("\n--- Breusch-Pagan test (model heteroscedasticity) ---\n")
+print(lmtest::bptest(lm_log_MPN.Peso))
+
+dev.off()
+
+
+```
+
+### Effect of Richness and phylogenetic diversity on Load and Weight 
+
+The effect of Richness and phylogenetic diversity on Load and Weight was assessed. First, the correlation between both variables was examined, and if one was detected, the fraction of phylogenetic diversity independent of Richness was calculated. Next, the effects of Richness and the fraction of phylogenetic diversity independent of Richness on Load and Weight were evaluated.
+
+```{r}
+
+# 1) Initial exploration ---------------------------------------------------
+# Scatterplot of Richness vs Faith_D with smoothing and a fitted line to assess linearity
+png("graficos/riqueza_vs_faith.png", width = 800, height = 600)
+
+par(mar = c(5, 6.5, 4, 2) + 0.1,   
+    mgp = c(2.5, 0.8, 0))          
+
+plot(datos_est$Riqueza, datos_est$Faith_D,
+     xlab = "Richness", ylab = "Diversity",
+     main = "Richness vs. Diversity",
+     cex.lab = 1.8,   
+     cex.axis = 1.6,  
+     cex.main = 2.2,  
+     cex = 1.2,       
+     pch = 20, col = "grey30")
+
+lines(lowess(datos_est$Riqueza, datos_est$Faith_D), col = "blue")
+abline(lm(Faith_D ~ Riqueza, data = datos_est), col = "red", lwd = 2)
+
+dev.off()
+
+# Correlation (numerical)
+res_cor <- cor.test(datos_est$Riqueza, datos_est$Faith_D, method = "pearson")
+print(res_cor)          
+res_cor$estimate        
+res_cor$p.value          
+
+
+# 2) Residualize Faith_D with respect to Richness (fraction of Faith diversity independent of Richness) ---- ----
+m_FD_vs_r <- lm(Faith_D ~ Riqueza, data = datos_est)
+datos_est$FD_resid <- resid(m_FD_vs_r)   
+
+# 3) Models with the fraction of Faith diversity independent of Richness
+
+lm_Peso_resid <- lm(Peso_Seco ~ Riqueza + FD_resid, data = datos_est)
+cat("Final model summary (Dry Weight ~ Richness + FD_resid):\n")
+print(summary(lm_Peso_resid))
+lmtest::bptest(lm_Peso_resid)
+
+lm_MPN_resid <- lm(log_MPN ~ Riqueza + FD_resid, data = datos_est)
+cat("Resumen modelo final (log_MPN ~ Riqueza + FD_resid):\n")
+print(summary(lm_MPN_resid))
+print(Anova(lm_MPN_resid, type = "II"))
+lmtest::bptest(lm_MPN_resid)
+
+```
+
+# **Phylogenetic analysis** 
+
+## Top 10 families 
+
+The 10 most abundant families were calculated.
+
+```{r}
+
+# Because the data were rarefied, this was done as follows
+ps_familia <- tax_glom(ps_nocontrol_filtrado_rare, taxrank = "Family")
+ps_familia_rel <- transform_sample_counts(ps_familia, function(x) x / sum(x))
+
+
+# Add "Other" to the plot
+df <- phyloseq::psmelt(ps_familia_rel) |>
+  mutate(
+    Family = as.character(Family),
+    Family = ifelse(is.na(Family) | Family == "", "Unassigned", Family),
+    Family_plot = forcats::fct_lump_n(Family, n = 10, w = Abundance, other_level = "Otros")
+  )
+
+
+# Sum by sample (Top 10) and add "Other"; order the legend
+per_sample <- df |>
+  group_by(Sample, Comunidad, Tiempo, Family_plot) |>
+  summarise(Abund_rel = sum(Abundance), .groups = "drop")
+
+# Summarize for the plot: mean by Community x Time x Family_plot
+familia_plot <- per_sample |>
+  group_by(Comunidad, Tiempo, Family_plot) |>
+  summarise(NormalizedAbundance = mean(Abund_rel), .groups = "drop")
+
+# Reorder
+familia_plot <- familia_plot |>
+  mutate(
+    Family_plot = forcats::fct_reorder(Family_plot, NormalizedAbundance, .fun = mean, .desc = TRUE),
+    Family_plot = forcats::fct_relevel(Family_plot, "Otros", after = Inf))
+
+
+Top10_familias_otros <- ggplot(familia_plot, aes(x = factor(Tiempo), y = NormalizedAbundance, fill = Family_plot)) +
+  geom_bar(stat = "identity", position = "stack")  +
+  scale_fill_brewer(palette = "Set3") +
+    labs(title = "Top10 famylies",
+       x = "Time",
+       y = "Relative abundance",
+       fill = "Family") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right",
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 12),
+    legend.title = element_text(size = 10, face = "bold")) +
+  facet_wrap(~ Comunidad, scales = "free_y", ncol = 3) 
+
+ggsave("graficos/Top10_Familias_otros.png",
+       plot = Top10_familias_otros, width = 12, height = 6, dpi = 300)
+
+```
+
+## Effect of time on taxa abundance 
+
+In this section, the effect of time on the abundance of the different phyla and families will be evaluated.
+
+```{r}
+
+# ============================================
+#  Phylum-level analysis
+# ============================================
+
+ps_filo <- tax_glom(ps_nocontrol_filtrado_rare, taxrank = "Phylum", NArm = FALSE)
+ps_filo_rel <- transform_sample_counts(ps_filo, function(x) {
+  if (sum(x, na.rm = TRUE) > 0) x / sum(x, na.rm = TRUE) else x
+})
+
+# Extract OTU table
+otu_filo <- as.data.frame(otu_table(ps_filo_rel))
+
+# Transpose if needed
+
+if(taxa_are_rows(ps_filo_rel)) otu_filo <- as.data.frame(t(otu_filo))
+
+# Extract taxonomy
+tax_filo <- as.data.frame(tax_table(ps_filo_rel))
+colnames(otu_filo) <- tax_filo$Phylum
+
+# Run MaAsLin2 at phylum level
+fit_filo <- Maaslin2(
+  input_data = otu_filo,
+  input_metadata = datos_est,
+  output = "maaslin2_Filo_Tiempo",
+  fixed_effects = c("Tiempo"),
+  random_effects = c("Comunidad"),
+  normalization = "NONE",
+  transform = "AST",
+  min_abundance = 0.0001,
+  min_prevalence = 0.1,
+  plot_heatmap = FALSE,
+  plot_scatter = FALSE
+)
+
+# Read results
+maaslin_filo_res <- read.delim("maaslin2_Filo_Tiempo/all_results.tsv")
+colnames(maaslin_filo_res)[colnames(maaslin_filo_res) == "feature"] <- "Phylum"
+maaslin_filo_sig <- maaslin_filo_res[maaslin_filo_res$qval < 0.05, ]
+maaslin_filo_sig$Direction <- ifelse(maaslin_filo_sig$coef > 0, "↑ Increases", "↓ Decreases")
+
+maaslin_filo_sig <- maaslin_filo_sig[order(-abs(maaslin_filo_sig$coef)), ]
+
+print(maaslin_filo_sig[, c("Phylum", "coef", "qval", "Direction")])
+
+# ============================================
+#   Family-level analysis
+# ============================================
+
+ps_familia <- tax_glom(ps_nocontrol_filtrado_rare, taxrank = "Family")
+
+ps_familia_rel <- transform_sample_counts(ps_familia, function(x) {
+  if (sum(x, na.rm = TRUE) > 0) x / sum(x, na.rm = TRUE) else x
+})
+
+
+# Extract OTU table
+otu_familia <- as.data.frame(otu_table(ps_familia_rel))
+
+# Transpose if needed
+
+if(taxa_are_rows(ps_familia_rel)) otu_familia <- as.data.frame(t(otu_familia))
+
+# Extract taxonomy
+tax_familia <- as.data.frame(tax_table(ps_familia_rel))
+colnames(otu_familia) <- tax_familia$Family  
+
+
+# Run MaAsLin2
+
+fit_familia <- Maaslin2(
+  input_data = otu_familia,
+  input_metadata = datos_est,
+  output = "maaslin2_Familia_Tiempo",
+  fixed_effects = c("Tiempo"),
+  random_effects = c("Comunidad"),
+  normalization = "NONE",  
+  transform = "AST",       
+  min_abundance = 0.0001,
+  min_prevalence = 0.1,
+  plot_heatmap = FALSE,
+  plot_scatter = FALSE
+)
+
+# Read results
+maaslin_familia_res <- read.delim("maaslin2_Familia_Tiempo/all_results.tsv")
+colnames(maaslin_familia_res)[colnames(maaslin_familia_res) == "feature"] <- "Family"
+
+
+# Filter significant
+maaslin_familia_sig <- maaslin_familia_res[maaslin_familia_res$qval < 0.05, ]
+maaslin_familia_sig$Direction <- ifelse(maaslin_familia_sig$coef > 0, "↑ Increases", "↓ Decreases")
+
+cat("Significant families (q < 0.05):", nrow(maaslin_familia_sig), "\n\n")
+print(maaslin_familia_sig[, c("Family", "coef", "pval", "qval", "Direction")])
+
+# Families that increase
+Familias_aumentan <- maaslin_familia_sig[maaslin_familia_sig$coef > 0, ]
+Familias_aumentan <- Familias_aumentan[order(-abs(Familias_aumentan$coef)), ]
+
+# Results
+print(Familias_aumentan[, c("Family", "coef", "qval", "Direction")])
+
+# Families that decrease
+
+Familias_disminuyen <- maaslin_familia_sig[maaslin_familia_sig$coef < 0, ]
+Familias_disminuyen <- Familias_disminuyen[order(-abs(Familias_disminuyen$coef)), ]
+
+# Results
+print(Familias_disminuyen[, c("Family", "coef", "qval", "Direction")])
+
+
+# Create a list with the results
+lista_resultados <- list(
+  "Filos_significativos" = maaslin_filo_sig,
+  "Aumentan" = Familias_aumentan,
+  "Disminuyen" = Familias_disminuyen)
+
+# Save to Excel
+write_xlsx(lista_resultados, "Resultados_Filo_Familia_Temporales.xlsx")
+
+```
+---
+
+# **Composition analysis**  
+
+## Microbial composition - Bray-Curtis
+
+Here, microbial composition is represented using NMDS (Non-metric Multidimensional Scaling) based on Bray-Curtis distances, separating the data by Community type and sampling time, and visually grouping them according to these variables.
+
+
+```{r}
+
+
+ps_prop <- transform_sample_counts(ps_nocontrol_filtrado_rare, function(otu) otu/sum(otu))
+set.seed(123)
+ord_nmds_bray <- ordinate(ps_prop, method="NMDS", distance="bray")
+
+# First, calculate the distance matrix using Bray-Curtis
+bray_Comunidad <- plot_ordination(ps_prop, ord_nmds_bray, shape="Tiempo", color="Comunidad", title="") +
+  stat_ellipse(aes(color=Comunidad, group=Comunidad), level=0.95, linetype="solid", linewidth=1) +   
+  geom_point() + 
+  labs (
+    shape = "Time",
+     color = "Community")+
+  scale_shape_manual(values = c(0:9)) + 
+  scale_color_manual(values = c("red", "blue", "green", "purple", "orange", "pink", "brown", "yellow", "cyan", "black")) +
+  guides(color = guide_legend(nrow = 5), shape = guide_legend(nrow = 5)) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA),
+    axis.text.x = element_text(angle = 0, hjust = 1, size = 10),
+    axis.text.y = element_text(size = 10),
+    legend.title = element_text(margin = margin(b = 10)))
+  
+ggsave("graficos/bray_Comunidad.svg", plot = bray_Comunidad, width = 8, height = 6, dpi = 300)
+
+bray_tiempo <- plot_ordination(ps_prop, ord_nmds_bray, shape="Comunidad", color="Tiempo", title="") +
+  stat_ellipse(aes(color=Tiempo, group=Tiempo), level=0.95, linetype="solid", linewidth=1) +  
+  geom_point() +  
+  labs (
+    shape = "Time",
+     color = "Community")+
+  scale_shape_manual(values = c(0:9)) + 
+  scale_color_manual(values = c("red", "blue", "green", "purple", "orange", "pink", "brown", "yellow", "cyan", "black")) +
+  guides(color = guide_legend(nrow = 5), shape = guide_legend(nrow = 5)) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA),
+    axis.text.x = element_text(angle = 0, hjust = 1, size = 10),
+    axis.text.y = element_text(size = 10),
+    legend.title = element_text(margin = margin(b = 10)))
+  
+ggsave("graficos/bray_tiempo.svg", bray_tiempo, width = 8, height = 6, dpi = 300)
+
+bray_paneles <-  (bray_Comunidad | bray_tiempo) +
+  plot_annotation(
+    tag_levels = 'A',
+    tag_prefix = "",
+    tag_suffix = ") "
+  )
+
+ggsave("graficos/bray_paneles.svg", bray_paneles, width = 14, height = 6, dpi = 300)
+
+```
+
+### Microbial composition by Community - Bray-Curtis 
+
+Here, microbial composition is represented using NMDS with Bray-Curtis distances, separating the data by Community type and grouping them by sampling time.
+
+```{r}
+
+
+Comunidades <- unique(sample_data(ps_prop)$Comunidad)
+lista_graficos <- list()
+
+
+for (s in Comunidades) {
+  ps_Comunidad <- subset_samples(ps_prop, Comunidad == s)
+  set.seed(123)
+  ord_Comunidad <- ordinate(ps_Comunidad, method = "NMDS", distance = "bray")
+
+  Bray<- plot_ordination(ps_Comunidad, ord_Comunidad, shape = "Tiempo", color = "Tiempo", title = paste("NMDS Bray-Curtis - Comunidad", s)) +
+    stat_ellipse(aes(color = Tiempo, group = Tiempo), level = 0.95, linetype = "solid", linewidth = 1) +
+    geom_point(size = 3) +  
+  labs (
+    shape = "Time",
+     color = "Community")+
+    scale_shape_manual(values = c(0:9)) +
+    scale_color_manual(values = c("red", "blue", "green", "purple", "orange", "pink", "brown", "yellow", "cyan", "black")) +
+    guides(color = guide_legend(nrow = 5), shape = guide_legend(nrow = 5)) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      plot.background = element_rect(fill = "white", color = NA),
+      panel.background = element_rect(fill = "white", color = NA),
+      strip.text = element_blank(),
+    axis.text.x = element_text(angle = 0, hjust = 1, size = 10),
+    axis.text.y = element_text(size = 10),
+    legend.title = element_text(margin = margin(b = 10)))
+  
+  file_nmds <- file.path(out_graf, paste0("Bray_comunidad_", s, ".svg"))
+  ggsave(filename = file_nmds, plot =  Bray, width = 7, height = 5, dpi = 300)
+ 
+  lista_graficos[[s]] <- Bray
+
+  
+  message("Guardado: ", file_nmds)
+  
+}
+
+Bray_Comunidades_combinados <- wrap_plots(lista_graficos, ncol = 4) +
+  plot_annotation(
+    tag_levels = "A",
+    tag_suffix = ") "
+  )
+
+ggsave(file.path(out_graf, "Bray_comunidades_combinadas.svg"),
+       plot = Bray_Comunidades_combinados,
+       width = 16, height = 12, dpi = 300)
+```
+
+### Redundancy analysis - Bray-Curtis 
+
+A partial distance-based redundancy analysis (dbRDA) using Bray-Curtis distances was performed, modeling sample composition as a function of Time while controlling for Community, and as a function of Community while controlling for Time.
+
+```{r}
+
+Z <- as(otu_table(ps_prop), "matrix")
+if (taxa_are_rows(ps_prop)) Z <- t(Z)
+
+bray <- vegdist(Z, method = "bray")
+
+meta <- data.frame(sample_data(ps_prop))
+meta$Comunidad <- factor(meta$Comunidad)
+meta$Tiempo <- as.numeric(meta$Tiempo)
+
+mod_db_T <- capscale(bray ~ Tiempo + Condition(Comunidad), data = meta)
+anova(mod_db_T)        
+RsquareAdj(mod_db_T)
+
+mod_db_C <- capscale(bray ~ Comunidad + Condition(Tiempo), data = meta)
+anova(mod_db_C)        
+RsquareAdj(mod_db_C)
+
+```
+
+## Microbial composition - UniFrac 
+
+Here, microbial composition is represented using NMDS based on UniFrac distances, separating the data by Community type and sampling time, and visually grouping them according to these variables.
+
+```{r}
+
+set.seed(123)
+ord_nmds_unifrac <- ordinate(new_ps, method = "NMDS", distance = "Unifrac", weighted=TRUE)      
+
+
+Unifrac_Comunidad <- plot_ordination(new_ps, ord_nmds_unifrac, shape="Tiempo", color="Comunidad", title="") +
+  stat_ellipse(aes(color=Comunidad, group=Comunidad), level=0.95, linetype="solid", linewidth=1) +  
+  geom_point() +  
+  labs (
+    shape = "Time",
+     color = "Community")+ 
+  scale_shape_manual(values = c(0:9)) + 
+  scale_color_manual(values = c("red", "blue", "green", "purple", "orange", "pink", "brown", "yellow", "cyan", "black")) +
+  guides(color = guide_legend(nrow = 5), shape = guide_legend(nrow = 5)) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA),
+    axis.text.x = element_text(angle = 0, hjust = 1, size = 10),
+    axis.text.y = element_text(size = 10),
+    legend.title = element_text(margin = margin(b = 10)))
+
+
+ggsave("graficos/Unifrac_Comunidad.svg", plot = Unifrac_Comunidad, width = 8, height = 6, dpi = 300)
+
+Unifrac_Tiempo <- plot_ordination(new_ps, ord_nmds_unifrac, shape="Comunidad", color="Tiempo", title="") +
+  stat_ellipse(aes(color=Tiempo, group=Tiempo), level=0.95, linetype="solid", linewidth=1) +  
+  geom_point() +  
+  labs (
+    shape = "Time",
+     color = "Community")+ 
+  scale_shape_manual(values = c(0:9)) + 
+  scale_color_manual(values = c("red", "blue", "green", "purple", "orange", "pink", "brown", "yellow", "cyan", "black")) +
+  guides(color = guide_legend(nrow = 5), shape = guide_legend(nrow = 5)) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA),
+    axis.text.x = element_text(angle = 0, hjust = 1, size = 10),
+    axis.text.y = element_text(size = 10),
+    legend.title = element_text(margin = margin(b = 10)))
+
+
+ggsave("graficos/Unifrac_Tiempo.svg", plot = Unifrac_Tiempo, width = 8, height = 6, dpi = 300)
+
+
+Unifrac_paneles <-  (Unifrac_Comunidad |Unifrac_Tiempo) +
+  plot_annotation(
+    tag_levels = 'A',
+    tag_prefix = "",
+    tag_suffix = ") "
+  )
+
+ggsave("graficos/Unifrac_paneles.svg", Unifrac_paneles, width = 14, height = 6, dpi = 300)
+
+```
+
+
+### Microbial composition by Community - UniFrac 
+
+Here, we represent microbial composition using NMDS based on UniFrac distances, separating the data by each Community type and grouping them according to sampling time.
+
+```{r}
+
+Comunidades <- unique(sample_data(ps_prop)$Comunidad)
+lista_graficos <- list()
+
+
+for (s in Comunidades) {
+  ps_Comunidad_new <- subset_samples(new_ps, Comunidad == s)
+  set.seed(123)
+  ord_Comunidad_new <- ordinate(ps_Comunidad_new, method = "NMDS",distance = "Unifrac", weighted=TRUE) 
+
+  Unifrac<- plot_ordination(ps_Comunidad_new, ord_Comunidad_new, shape = "Tiempo", color = "Tiempo", title = paste("NMDS Unifrac - Comunidad", s)) +
+    stat_ellipse(aes(color = Tiempo, group = Tiempo), level = 0.95, linetype = "solid", linewidth = 1) +
+    geom_point(size = 3) +  
+  labs (
+    shape = "Time",
+     color = "Community") +
+    scale_shape_manual(values = c(0:9)) +
+    scale_color_manual(values = c("red", "blue", "green", "purple", "orange", "pink", "brown", "yellow", "cyan", "black")) +
+    guides(color = guide_legend(nrow = 5), shape = guide_legend(nrow = 5)) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      plot.background = element_rect(fill = "white", color = NA),
+      panel.background = element_rect(fill = "white", color = NA),
+      strip.text = element_blank(),
+    axis.text.x = element_text(angle = 0, hjust = 1, size = 10),
+    axis.text.y = element_text(size = 10),
+    legend.title = element_text(margin = margin(b = 10)))
+  
+  file_nmds <- file.path(out_graf, paste0("Unifrac_comunidad_", s, ".svg"))
+  ggsave(filename = file_nmds, plot =  Unifrac, width = 7, height = 5, dpi = 300)
+ 
+  lista_graficos[[s]] <- Unifrac
+
+  
+  message("Guardado: ", file_nmds)
+  
+}
+
+Unifrac_Comunidades_combinados <- wrap_plots(lista_graficos, ncol = 4) +
+  plot_annotation(
+    tag_levels = "A",
+    tag_suffix = ") "
+  )
+
+ggsave(file.path(out_graf, "Unifrac_comunidades_combinadas.svg"),
+       plot = Unifrac_Comunidades_combinados,
+       width = 16, height = 12, dpi = 300)
+
+```
+ 
+### Redundancy analysis - UniFrac
+
+A partial distance-based redundancy analysis (partial dbRDA) using UniFrac distances was performed, modeling sample composition as a function of Time while controlling for Community, and as a function of Community while controlling for Time.
+
+```{r}
+Uni <- phyloseq::distance(new_ps, method = "unifrac", weighted = TRUE)
+
+meta_Uni <- data.frame(sample_data(new_ps))
+meta_Uni$Comunidad <- factor(meta_Uni$Comunidad)
+meta_Uni$Tiempo <- as.numeric(meta_Uni$Tiempo)
+mod_db_uni<- capscale(Uni ~ Tiempo + Condition(Comunidad), data = meta_Uni)
+anova(mod_db_uni)             
+
+
+mod_db_uni_C<- capscale(Uni ~ Comunidad + Condition(Tiempo), data = meta_Uni)
+anova(mod_db_uni_C)             
+
+```
+
+## Analysis of the evolution of intra-Community dissimilarity over time using Bray-Curtis distances 
+
+This section analyzes the temporal dynamics of microbial composition using the Bray-Curtis distance matrix. The mean distance within each Community is then calculated for each Time level, and the temporal trend is estimated for each Community. Next, the slopes are weighted to calculate a global statistic, and its statistical significance is evaluated using a restricted permutation test.
+
+```{r}
+
+bray_mat <- as.matrix(bray)
+
+
+intra_bray <- sapply(seq_len(nrow(bray_mat)), function(i) {
+  others <- which(meta$Comunidad == meta$Comunidad[i] &
+                  meta$Tiempo    == meta$Tiempo[i] &
+                  seq_len(nrow(bray_mat)) != i)
+  if (length(others) < 1) return(NA_real_)   # n = 1 -> NA
+  mean(bray_mat[i, others], na.rm = TRUE)
+})
+
+df_bray <-meta
+
+df_bray$Tiempo <- factor(df_bray$Tiempo, levels = sort(unique(df_bray$Tiempo)))
+
+Boxplot_bray<- ggplot(df_bray, aes(x = factor(Tiempo), y = intra_bray)) +
+  geom_boxplot(outlier.shape = NA, coef = 1.5, fill = "lightblue") +
+  geom_jitter(width = 0.2, alpha = 0.5, color = "darkblue") +
+  facet_wrap(~Comunidad, scales = "free_y") +
+  labs(x = "Time", y = "Intra-community Bray-Curtis distance") +
+  theme_bw(base_size = 14) +
+  theme(
+    strip.background = element_rect(fill = "lightgray", colour = "black", size = 0.5),
+    strip.text = element_text(margin = margin(t = 1, r = 2, b = 1, l = 2))
+  )
+
+print(Boxplot_bray)
+
+
+ggsave("graficos/Boxplot_bray.svg",
+       plot = Boxplot_bray,
+       width = 10, height = 5, dpi = 300)
+
+## -------------------------
+## 1) Utilities
+## -------------------------
+to_matrix <- function(bray_mat){
+  if (inherits(bray_mat, "dist")) {
+    as.matrix(bray_mat)
+  } else {
+    as.matrix(bray_mat)
+  }
+}
+ 
+## Mean distance within each (Community x time)
+## number of pairs used (for weighting)
+mean_within_time <- function(Dmat, meta){
+  stopifnot(nrow(Dmat) == nrow(meta))
+  # indices by community x time
+  grp <- interaction(meta$Comunidad, meta$Tiempo, drop = TRUE)
+  idx_list <- split(seq_len(nrow(Dmat)), grp)
+ 
+  out <- lapply(names(idx_list), function(nm){
+    ix <- idx_list[[nm]]
+    # We need at least 2 replicates to form pairs
+    if (length(ix) < 2) return(NULL)
+    Di <- Dmat[ix, ix, drop = FALSE]
+   # upper-triangle mean
+    m <- mean(Di[upper.tri(Di)])
+    n_pairs <- choose(length(ix), 2)
+    parts <- strsplit(nm, split="\\.")[[1]]
+    data.frame(Comunidad = parts[1],
+               Tiempo = as.numeric(paste(parts[-1], collapse=".")), # soporta tiempos no enteros
+               mean_dist = m,
+               n_pairs = n_pairs,
+               stringsAsFactors = FALSE)
+  })
+  do.call(rbind, out)
+}
+ 
+## Slope by community (WLS by number of pairs)
+slope_by_Comunidad <- function(df_ct){
+  split(df_ct, df_ct$Comunidad) |>
+    lapply(function(dd){
+      dd <- dd[order(dd$Tiempo), ]
+     # if there are fewer than 2 time points with data, we cannot estimate a slope
+      if (nrow(dd) < 2) return(data.frame(slope = NA_real_,
+                                          n_pairs_total = sum(dd$n_pairs)))
+      fit <- try(suppressWarnings(
+        lm(mean_dist ~ Tiempo, data = dd, weights = n_pairs)
+      ), silent = TRUE)
+      if (inherits(fit, "try-error")) {
+        data.frame(slope = NA_real_, n_pairs_total = sum(dd$n_pairs))
+      } else {
+        data.frame(slope = unname(coef(fit)["Tiempo"]),
+                   n_pairs_total = sum(dd$n_pairs))
+      }
+    }) |>
+    (\(lst) {
+      ans <- do.call(rbind, lst)
+      ans$Comunidad <- rownames(ans)
+      rownames(ans) <- NULL
+      ans
+    })()
+}
+ 
+## Global statistic: weighted mean of slopes by total number of pairs
+global_stat <- function(tab_slope){
+  w <- tab_slope$n_pairs_total
+  s <- tab_slope$slope
+  # If there are NAs, ignore those communities (insufficient data)
+  keep <- is.finite(s) & is.finite(w) & w > 0
+  sum(s[keep] * w[keep]) / sum(w[keep])
+}
+ 
+## Pipeline to obtain the observed statistic
+compute_observed <- function(Dmat, meta){
+  df_ct <- mean_within_time(Dmat, meta)
+  tab_slope <- slope_by_Comunidad(df_ct)
+  list(df_ct = df_ct,
+       tab_slope = tab_slope,
+       stat_global = global_stat(tab_slope))
+}
+ 
+## Permutación: baraja 'time' **dentro de cada comunidad**
+permute_times_within_comm <- function(meta){
+  meta_perm <- meta
+  meta_perm$Tiempo <- ave(meta$Tiempo, meta$Comunidad, FUN = function(t) sample(t))
+  meta_perm
+}
+ 
+## -------------------------
+## 2) Data preparation
+## -------------------------
+## Align meta and Dmat
+Dmat <- to_matrix(bray_mat)
+ 
+## Ensure that meta$Nombre aligns with the rows/columns of Dmat
+## (we assume rownames(Dmat) are Names)
+stopifnot(all(meta$Nombre %in% rownames(Dmat)))
+## Reorder meta and D so that they match
+meta <- meta[match(rownames(Dmat), meta$Nombre), ]
+stopifnot(all(meta$Nombre == rownames(Dmat)))
+ 
+## Coercions
+meta$Comunidad <- as.factor(meta$Comunidad)
+meta$Tiempo <- as.numeric(meta$Tiempo)
+ 
+## -------------------------
+## 3) Observed
+## -------------------------
+obs <- compute_observed(Dmat, meta)
+obs$tab_slope        # slopes by community
+obs$stat_global      # global statistic (we expect it to be negative if there is convergence)
+ 
+## -------------------------
+## 4) Restricted permutation (global p-value)
+## -------------------------
+set.seed(123)
+B <- 4999  # number of permutations (adjust according to available time)
+ 
+null_stats <- replicate(B, {
+  meta_p <- permute_times_within_comm(meta)
+  compute_observed(Dmat, meta_p)$stat_global
+})
+ 
+## p-valor unidireccional (H1: stat_global_obs < 0)
+p_global <- (1 + sum(null_stats <= obs$stat_global)) / (B + 1)
+ 
+## -------------------------
+## 5) Results
+## -------------------------
+cat(sprintf("Global statistic (weighted mean slope): %.6f\n", obs$stat_global))
+cat(sprintf("p-value (one-sided; convergence: slope < 0): %.4f\n", p_global))
+ 
+## (Optional) Summary by community:
+print(obs$tab_slope[order(obs$tab_slope$slope), ], row.names = FALSE)
+ 
+## (Optional) Quick visualization of null vs observed
+ hist(null_stats, breaks=40, main="Null distribution of the global statistic",
+      xlab="Pendiente media ponderada")
+ abline(v = obs$stat_global, col=2, lwd=2)
+ 
+```
+
+## Analysis of the evolution of intra-Community dissimilarity over time using UniFrac distances 
+
+This section analyzes the temporal dynamics of microbial composition using the UniFrac distance matrix. The mean within-Community distance is calculated for each Time level, and the temporal trend is estimated for each Community. Next, the slopes are weighted to calculate a global statistic, and its statistical significance is evaluated using a restricted permutation test.
+
+```{r}
+
+Uni_mat <- as.matrix(Uni)
+
+intra_Uni <- sapply(seq_len(nrow(Uni_mat)), function(i) {
+  others <- which(meta_Uni$Comunidad == meta_Uni$Comunidad[i] &
+                  meta_Uni$Tiempo    == meta_Uni$Tiempo[i] &
+                  seq_len(nrow(Uni_mat)) != i)
+  if (length(others) < 1) return(NA_real_)   # n = 1 -> NA
+  mean(Uni_mat[i, others], na.rm = TRUE)
+})
+
+df_Uni <-meta_Uni
+df_Uni$intra_Uni <- intra_Uni
+df_Uni$Tiempo <- factor(df_Uni$Tiempo, levels = sort(unique(df_Uni$Tiempo)))
+
+Boxplot_Uni<- ggplot(df_Uni, aes(x = factor(Tiempo), y = intra_Uni)) +
+  geom_boxplot(outlier.shape = NA, coef = 1.5, fill = "lightblue") +
+  geom_jitter(width = 0.2, alpha = 0.5, color = "darkblue") +
+  facet_wrap(~Comunidad, scales = "free_y") +
+  labs(x = "Time", y = "Intra-community UniFrac distance") +
+  theme_bw(base_size = 14) +
+  theme(
+    strip.background = element_rect(fill = "lightgray", colour = "black", size = 0.5),
+    strip.text = element_text(margin = margin(t = 1, r = 2, b = 1, l = 2))
+  )
+
+print(Boxplot_Uni)
+
+
+ggsave("graficos/Boxplot_Uni.svg",
+       plot = Boxplot_Uni,
+       width = 10, height = 5, dpi = 300)
+
+## -------------------------
+## 1) Utilities
+## -------------------------
+to_matrix <- function(D){
+  if (inherits(D, "dist")) {
+    as.matrix(D)
+  } else {
+    as.matrix(D)
+  }
+}
+ 
+## Mean distance within each (Community x time)
+## number of pairs used (for weighting)
+mean_within_time <- function(Dmat, meta){
+  stopifnot(nrow(Dmat) == nrow(meta))
+  # indices by community x time
+  grp <- interaction(meta$Comunidad, meta$Tiempo, drop = TRUE)
+  idx_list <- split(seq_len(nrow(Dmat)), grp)
+ 
+  out <- lapply(names(idx_list), function(nm){
+    ix <- idx_list[[nm]]
+    # We need at least 2 replicates to form pairs
+    if (length(ix) < 2) return(NULL)
+    Di <- Dmat[ix, ix, drop = FALSE]
+   # upper-triangle mean
+    m <- mean(Di[upper.tri(Di)])
+    n_pairs <- choose(length(ix), 2)
+    parts <- strsplit(nm, split="\\.")[[1]]
+    data.frame(Comunidad = parts[1],
+               Tiempo = as.numeric(paste(parts[-1], collapse=".")), # soporta tiempos no enteros
+               mean_dist = m,
+               n_pairs = n_pairs,
+               stringsAsFactors = FALSE)
+  })
+  do.call(rbind, out)
+}
+ 
+## Slope by community (WLS by number of pairs)
+slope_by_Comunidad <- function(df_ct){
+  split(df_ct, df_ct$Comunidad) |>
+    lapply(function(dd){
+      dd <- dd[order(dd$Tiempo), ]
+      # if there are fewer than 2 time points with data, we cannot estimate a slope
+      if (nrow(dd) < 2) return(data.frame(slope = NA_real_,
+                                          n_pairs_total = sum(dd$n_pairs)))
+      fit <- try(suppressWarnings(
+        lm(mean_dist ~ Tiempo, data = dd, weights = n_pairs)
+      ), silent = TRUE)
+      if (inherits(fit, "try-error")) {
+        data.frame(slope = NA_real_, n_pairs_total = sum(dd$n_pairs))
+      } else {
+        data.frame(slope = unname(coef(fit)["Tiempo"]),
+                   n_pairs_total = sum(dd$n_pairs))
+      }
+    }) |>
+    (\(lst) {
+      ans <- do.call(rbind, lst)
+      ans$Comunidad <- rownames(ans)
+      rownames(ans) <- NULL
+      ans
+    })()
+}
+ 
+## Global statistic: weighted mean of slopes by total number of pairs
+global_stat <- function(tab_slope){
+  w <- tab_slope$n_pairs_total
+  s <- tab_slope$slope
+  # If there are NAs, ignore those communities (insufficient data)
+  keep <- is.finite(s) & is.finite(w) & w > 0
+  sum(s[keep] * w[keep]) / sum(w[keep])
+}
+ 
+## Pipeline to obtain the observed statistic
+compute_observed <- function(Dmat, meta){
+  df_ct <- mean_within_time(Dmat, meta)
+  tab_slope <- slope_by_Comunidad(df_ct)
+  list(df_ct = df_ct,
+       tab_slope = tab_slope,
+       stat_global = global_stat(tab_slope))
+}
+ 
+## Permutation: shuffle 'time' **within each community**
+permute_times_within_comm <- function(meta){
+  meta_perm <- meta
+  meta_perm$Tiempo <- ave(meta$Tiempo, meta$Comunidad, FUN = function(t) sample(t))
+  meta_perm
+}
+ 
+## -------------------------
+### 2) Data preparation
+## -------------------------
+## Align meta and Dmat
+Dmat_Uni <- to_matrix(Uni_mat)
+ 
+## Ensure that meta$Nombre aligns with the rows/columns of Dmat
+## (we assume rownames(Dmat) are Names)
+stopifnot(all(meta_Uni$Nombre %in% rownames(Dmat_Uni)))
+## Reorder meta and D so that they match
+meta_Uni <- meta_Uni[match(rownames(Dmat_Uni), meta_Uni$Nombre), ]
+stopifnot(all(meta_Uni$Nombre == rownames(Dmat_Uni)))
+ 
+## Coercions
+meta_Uni$Comunidad <- as.factor(meta_Uni$Comunidad)
+meta_Uni$Tiempo <- as.numeric(meta_Uni$Tiempo)
+ 
+## -------------------------
+## 3) Observed
+## -------------------------
+obs <- compute_observed(Dmat_Uni, meta_Uni)
+obs$tab_slope        # slopes by community
+obs$stat_global      # global statistic (we expect it to be negative if there is convergence)
+ 
+## -------------------------
+## 4)  Restricted permutation (global p-value)
+## -------------------------
+set.seed(123)
+B <- 4999  # number of permutations (adjust according to available time)
+ 
+null_stats <- replicate(B, {
+  meta_p <- permute_times_within_comm(meta_Uni)
+  compute_observed(Dmat_Uni, meta_p)$stat_global
+})
+ 
+## One-sided p-value (H1: stat_global_obs < 0)
+p_global <- (1 + sum(null_stats <= obs$stat_global)) / (B + 1)
+ 
+## -------------------------
+## 5) Results
+## -------------------------
+cat(sprintf("Global statistic (weighted mean slope): %.6f\n", obs$stat_global))
+cat(sprintf("p-value (one-sided; convergence: slope < 0): %.4f\n", p_global))
+ 
+## (Optional) Summary by community:
+print(obs$tab_slope[order(obs$tab_slope$slope), ], row.names = FALSE)
+ 
+## (Optional) Quick visualization of null vs observed
+ hist(null_stats, breaks=40, main="Null distribution of the global statistic",
+      xlab="Pendiente media ponderada")
+ abline(v = obs$stat_global, col=2, lwd=2)
+ 
+```
+
+## Phylogenetic clustering analysis
+
+The standardized effect size of the mean pairwise phylogenetic distance (MPD SES, from Mean Pairwise Distance Standardized Effect Size) between pairs of co-occurring taxa was determined. These values were then plotted for each community.
+
+
+```{r}
+
+set.seed(134)
+# Create community table
+comm <- as(otu_table(new_ps), "matrix")
+if (taxa_are_rows(new_ps)) comm <- t(comm)
+
+tree_pruned <- drop.tip(phy_tree(new_ps), setdiff(phy_tree(new_ps)$tip.label, colnames(comm)))
+tree_dist <- cophenetic(tree_pruned)
+
+mpd_res <- picante::ses.mpd(samp = comm, dis = tree_dist, null.model = "sample.pool", runs = 999)
+saveRDS(mpd_res, file = "mpd_res_ps_new.rds")
+
+
+
+
+# Add z-score to new_ps sample_data
+sample_data(new_ps)$mpd.obs.z_rare <- mpd_res$mpd.obs.z
+meta_new <- as(sample_data(new_ps), "data.frame")
+meta_new$Comunidad <- factor(meta_new$Comunidad)
+meta_new$mpd.obs.z_rare <- sample_data(new_ps)$mpd.obs.z_rare
+meta_new$Tiempo  <- as.integer(meta_new$Tiempo) 
+meta_new$cTiempo <- as.numeric(scale(meta_new$Tiempo, center = TRUE, scale = TRUE))
+
+meta_new$Comunidad <- relevel(meta_new$Comunidad, ref = "A")
+contrasts(meta_new$Comunidad)
+
+lmm_mpd <- lm(mpd.obs.z_rare ~ cTiempo + Comunidad,  data = meta_new)
+summary(lmm_mpd)
+anova(lmm_mpd)
+
+
+MPD_SES<- meta_new %>%
+    ggplot(aes(x = as.factor(Tiempo), y = mpd.obs.z_rare, fill = Comunidad)) +
+  geom_hline(yintercept = 0, lty = 'dashed') +
+  geom_boxplot() +
+  ylab('MPD SES') +
+  geom_point(position = position_jitterdodge(), alpha = 0.3) +
+  facet_wrap(~Comunidad, ncol = 3) +
+  ggtitle('') +
+  theme_bw() +
+  labs(x = "Time",
+       fill = "Community") +
+    theme(
+      axis.text.x = element_text(size = 12, hjust = 1),  
+      axis.text.y = element_text(size = 12),
+      axis.title.x = element_text(size = 12, face = "bold"),         
+      axis.title.y = element_text(size = 12, face = "bold"),
+      legend.text = element_text(size = 12),
+      legend.title = element_text(size = 14, face="bold"),
+      plot.title   = element_text(size = 14, face = "bold", hjust = 0.5) 
+    )
+
+ MPD_SES
+ggsave("graficos/MPD.png", MPD_SES, width = 16, height = 12, dpi = 300)
+
+```
+
+
