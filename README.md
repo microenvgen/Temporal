@@ -22,10 +22,11 @@ The sequences from Illumina were pre-processed by removing the primers and then 
 - The effects of Community and Time on the working variables are statistically analyzed.
 - The effects of Richness and Diversity on Load and Weight are also statistically analyzed.
 
-### Análisis filogenético
+### Phylogenetic analysis
 
-- Se calculan las 10 familias más abundantes.
-- Se analiza el efecto de Tiempo sobre la abundancia de los diferentes Filos y Familias.
+- The 10 most abundant families are calculated.
+- The effect of time on the abundance of the different phyla and families is evaluated.
+  
 
 ### Análisis de la composición
 
