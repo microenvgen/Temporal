@@ -11,16 +11,16 @@ The sequences from Illumina were pre-processed by removing the primers and then 
 
 ## Contents
 
-- metadata_Temp: the excell file
-- `Analysis.Rmd`:  the script containing the code used to perform the analyses in this chapter.
+- metadata_Temp: the Excel file
+- `Analysis.Rmd`: the script containing the code used to perform the analyses in this study.
  
 ## Functions
 
-### Análisis de diversidad y correlaciones
+### Diversity analysis and correlations
 
-- Se representan los valores de las variables de trabajo (Carga, Peso, Riqueza, Homogeneidad y Diversidad) en función de Comunidad y Tiempo.
-- Se analizan estadísticamente los efectos de Comunidad y Tiempo sobre las variables de trabajo.
-- Se analizan estadísticamente los efectos de Riqueza y Diversidad sobre Carga y Peso.
+- The values of the working variables (Bacterial load, Weight, Richness, Homogeneity and Diversity) are plotted by Community and Time.
+- The effects of Community and Time on the working variables are statistically analyzed.
+- The effects of Richness and Diversity on Load and Weight are also statistically analyzed.
 
 ### Análisis filogenético
 
