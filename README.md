@@ -11,8 +11,9 @@ The sequences from Illumina were pre-processed by removing the primers and then 
 
 ## Contents
 
-- metadata_Temp: the Excel file containing the necessary data.
-- `Analysis.Rmd`: the script containing the code used to perform the analyses in this study.
+- metadata_Temp: The Excel file containing the necessary data.
+- `Analysis.Rmd`: The script containing the code used to perform the analyses in this study.
+- `Phylogenetic_tree.Rmd`: This script adds the phylogenetic tree to the phyloseq object to enable phylogenetic diversity analyses.
  
 ## Functions
 
