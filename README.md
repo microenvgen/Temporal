@@ -2,7 +2,7 @@
 This study aimed to investigate the temporal dynamics of microbial communities in the tomato rhizosphere. To this end, we designed an approach to assess changes in these communities through high-resolution sampling at short time intervals, allowing for detailed monitoring of the significant shifts occurring during the early stages of plant development.
 
 <p align="center">
-  <img src="imagenes/temporal.svg" alt="temporal">
+  <img src="imagenes/temporal.svg" alt="temporal design">
 </p>
  
 ## Pre-processing
