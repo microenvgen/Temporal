@@ -11,7 +11,7 @@ The sequences from Illumina were pre-processed by removing the primers and then 
 
 ## Contents
 
-- metadata_Temp: the Excel file
+- metadata_Temp: the Excel file containing the necessary data.
 - `Analysis.Rmd`: the script containing the code used to perform the analyses in this study.
  
 ## Functions
@@ -28,13 +28,13 @@ The sequences from Illumina were pre-processed by removing the primers and then 
 - The effect of time on the abundance of the different phyla and families is evaluated.
   
 
-### Análisis de la composición
+### Composition analysis
 
-- Representación de la composición microbiana mediante el método NMDS utilizando distancias Bray-Curtis, separando los datos por tipo de Comunidad y tiempo de muestreo, y agrupándolos visualmente según estas variables.
-- Representación la composición microbiana, mediante el método NMDS utilizando distancias Bray-Curtis, separando los datos por cada tipo de Comunidad y agrupándolos según el tiempo de muestreo.
-- Análisis de redundancia basado en distancias (dbRDA con Bray–Curtis) en su versión parcial, modelando la composición de las muestras en función de Tiempo mientras se controla el efecto de Comunidad y también modelando la composición de las muestras en función de Comunidad mientras se controla por Tiempo.
-- Representación de la composición microbiana mediante el método NMDS utilizando distancias Unifrac, separando los datos por tipo de Comunidad y tiempo de muestreo, y agrupándolos visualmente según estas variables.
-- Representación la composición microbiana, mediante el método NMDS utilizando distancias Unifrac, separando los datos por cada tipo de Comunidad y agrupándolos según el tiempo de muestreo.
-- Análisis de redundancia basado en distancias (dbRDA con Unifrac) en su versión parcial, modelando la composición de las muestras en función de Tiempo mientras se controla el efecto de Comunidad y también modelando la composición de las muestras en función de Comunidad mientras se controla por Tiempo.
-- Análisis de la dinámica temporal de la composición microbiana utilizando la matriz de distancias Bray-Curtis. Se calcula la distancia media dentro de cada comunidad por cada nivel de Tiempo y se estima la tendencia temporal para cada Comunidad. Después, se ponderan las pendientes para calcular un estadístico global y se evalúa su significancia estadística mediante un test de permutación restringida.
-- Análisis de la dinámica temporal de la composición microbiana utilizando la matriz de distancias Unifrac. Se calcula la distancia media dentro de cada comunidad por cada nivel de Tiempo y se estima la tendencia temporal para cada Comunidad. Después, se ponderan las pendientes para calcular un estadístico global y se evalúa su significancia estadística mediante un test de permutación restringida.
+- Microbial community composition is represented using NMDS based on Bray–Curtis distances, with samples separated by Community type and sampling time and grouped according to these variables for visualization.
+- Microbial community composition is represented using NMDS based on Bray–Curtis distances, separating the data by Community type and grouping samples according to sampling time.
+- Distance-based redundancy analysis (partial dbRDA using Bray–Curtis distances) was performed to model sample composition as a function of Time while controlling for Community, and as a function of Community while controlling for Time.
+- Microbial community composition is represented using NMDS based on Unifrac distances, with samples separated by Community type and sampling time and grouped according to these variables for visualization.
+- Microbial community composition is represented using NMDS based on Unifrac distances, separating the data by Community type and grouping samples according to sampling time.
+- Distance-based redundancy analysis (partial dbRDA using Unifrac distances) was performed to model sample composition as a function of Time while controlling for Community, and as a function of Community while controlling for Time.
+-Temporal dynamics of microbial community composition are analyzed using a Bray–Curtis distance matrix. The mean within-community distance is calculated for each Time level, and temporal trends are estimated for each Community. The resulting slopes are then weighted to compute a global statistic, whose significance is assessed using a restricted permutation test.
+- Temporal dynamics of microbial community composition are analyzed using a Unifrac distance matrix. The mean within-community distance is calculated for each Time level, and temporal trends are estimated for each Community. The resulting slopes are then weighted to compute a global statistic, whose significance is assessed using a restricted permutation test.
