@@ -197,9 +197,6 @@ sample_data(ps_nocontrol_filtrado_2)$Peso_Seco[is.na(sample_data(ps_nocontrol_fi
 
 
 
-sample_data(ps_nocontrol_filtrado_2)$MPN.Peso[sample_data(ps_nocontrol_filtrado_2)$MPN.Peso == "NA"] <- NA
-sample_data(ps_nocontrol_filtrado_2)$MPN.Peso <- as.numeric(sample_data(ps_nocontrol_filtrado_2)$MPN.Peso)
-sample_data(ps_nocontrol_filtrado_2)$MPN.Peso[is.na(sample_data(ps_nocontrol_filtrado_2)$MPN.Peso)] <- 0
 
 ```
 
