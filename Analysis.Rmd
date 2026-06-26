@@ -588,7 +588,7 @@ The 10 most abundant families were calculated.
 
 ```{r}
 
-# Because the data were rarefied, this was done as follows
+# As the data had already been rarefied, the following procedure was carried out.
 ps_familia <- tax_glom(ps_nocontrol_filtrado_rare, taxrank = "Family")
 ps_familia_rel <- transform_sample_counts(ps_familia, function(x) x / sum(x))
 
@@ -622,7 +622,7 @@ familia_plot <- familia_plot |>
 Top10_familias_otros <- ggplot(familia_plot, aes(x = factor(Tiempo), y = NormalizedAbundance, fill = Family_plot)) +
   geom_bar(stat = "identity", position = "stack")  +
   scale_fill_brewer(palette = "Set3") +
-    labs(title = "Top10 famylies",
+    labs(title = "Top10 families",
        x = "Time",
        y = "Relative abundance",
        fill = "Family") +
