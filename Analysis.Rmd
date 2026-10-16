@@ -1049,10 +1049,11 @@ meta_Uni$Comunidad <- factor(meta_Uni$Comunidad)
 meta_Uni$Tiempo <- as.numeric(meta_Uni$Tiempo)
 mod_db_uni<- capscale(Uni ~ Tiempo + Condition(Comunidad), data = meta_Uni)
 anova(mod_db_uni)             
-
+RsquareAdj(mod_db_uni)
 
 mod_db_uni_C<- capscale(Uni ~ Comunidad + Condition(Tiempo), data = meta_Uni)
 anova(mod_db_uni_C)             
+RsquareAdj(mod_db_uni_C)
 
 ```
 
